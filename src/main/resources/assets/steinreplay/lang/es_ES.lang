@@ -1,0 +1,22 @@
+# Replay: repetición de la muerte
+steinreplay.title=Repetición de la muerte
+steinreplay.enabled=Mostrar al morir
+steinreplay.seconds=Duración
+steinreplay.paused=en pausa
+steinreplay.killedBy=§fMuerto por §c%s
+steinreplay.keysSaved=Espacio: pausar   Izquierda/Derecha: 5 s   Arriba/Abajo: velocidad   Esc: volver
+steinreplay.save=Guardar repeticiones
+steinreplay.saved=Repeticiones guardadas
+steinreplay.none=Todavía no hay repeticiones guardadas
+steinreplay.watch=Ver
+steinreplay.delete=Borrar
+steinreplay.confirm=¿Confirmar?
+steinreplay.folder=Abrir carpeta
+steinreplay.noKiller=Sin asesino
+steinreplay.leaveToWatch=Sal del servidor para ver las repeticiones guardadas
+steinreplay.watchHint=Para ver una repetición guardada, sal del servidor y abre Stein Loader > Replay > Configurar.
+steinreplay.deleteFailed=No se pudo borrar el archivo
+steinreplay.cantOpen=No se pudo abrir esta repetición
+steinreplay.respawn=Reaparecer
+steinreplay.leave=Salir del servidor
+steinreplay.killedYou=te mató

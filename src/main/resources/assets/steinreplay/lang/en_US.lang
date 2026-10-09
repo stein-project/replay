@@ -1,0 +1,22 @@
+# Replay: death replay
+steinreplay.title=Death replay
+steinreplay.enabled=Show on death
+steinreplay.seconds=Length
+steinreplay.paused=paused
+steinreplay.killedBy=§fKilled by §c%s
+steinreplay.keysSaved=Space: pause   Left/Right: 5 s   Up/Down: speed   Esc: back
+steinreplay.save=Save replays
+steinreplay.saved=Saved replays
+steinreplay.none=No saved replays yet
+steinreplay.watch=Watch
+steinreplay.delete=Delete
+steinreplay.confirm=Confirm?
+steinreplay.folder=Open folder
+steinreplay.noKiller=No killer
+steinreplay.leaveToWatch=Leave the server to watch saved replays
+steinreplay.watchHint=To watch a saved replay, leave the server and open Stein Loader > Replay > Configure.
+steinreplay.deleteFailed=Could not delete the file
+steinreplay.cantOpen=Could not open this replay
+steinreplay.respawn=Respawn
+steinreplay.leave=Leave server
+steinreplay.killedYou=killed you
