@@ -11,25 +11,39 @@ package dev.xavier.stein.replay;
 import dev.xavier.stein.loader.api.Lang;
 import dev.xavier.stein.loader.api.Render;
 import dev.xavier.stein.loader.api.Typeface;
+
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
-import net.minecraft.item.ItemArmor;
 import net.minecraft.item.ItemStack;
 
+import org.lwjgl.input.Keyboard;
+
+import java.util.Locale;
+
 /**
- * A tela por cima do replay: o card de quem te matou, a barra de baixo (tempo) e o escurecimento entre as voltas. O
- * mundo de tras e o replay, desenhado pela {@link Session}.
+ * The screen over the replay: the killer's card, the bar at the bottom (time) and the fade between
+ * rounds. The world behind is the replay, played by the {@link Session}.
  *
- * <p>No replay da morte ela e a tela de morte: so se assiste (a camera e a velocidade sao as do replay), ele repete ate
- * o jogador renascer, e no canto de cima, a direita, ficam os botoes de renascer e de sair do servidor. No replay salvo:
- * espaco pausa, setas para os lados voltam e avancam 5 segundos, setas para cima e para baixo mudam a velocidade, clicar
- * na barra vai para aquele ponto e Esc volta para a lista.
+ * <p>In the death replay it is the death screen: you only watch (the camera and the speed are the
+ * replay's), it loops until the player respawns, and the top right corner has the respawn and
+ * leave-server buttons. In a saved replay: space pauses, left and right go back and forward 5
+ * seconds, up and down change the speed, clicking the bar goes to that point and Esc goes back to
+ * the list.
  */
 final class ReplayScreen extends GuiScreen {
 
     private static final int BAR_H = 34;
-    /** Ticks ate os botoes valerem (como na tela de morte do jogo, para um clique perdido nao renascer na hora). */
+
+    /**
+     * Ticks until the buttons work (as on the game's death screen: a stray click does not respawn).
+     */
     private static final int BUTTONS_AFTER = 20;
+
+    private static final int RESPAWN = 0;
+    private static final int LEAVE = 1;
+
+    /** A seek with the arrows, in ticks (5 seconds). */
+    private static final int SEEK = 100;
 
     private final SteinReplay mod;
     private int ticks;
@@ -52,8 +66,10 @@ final class ReplayScreen extends GuiScreen {
             return;
         }
         int w = 120;
-        buttonList.add(new GuiButton(0, width - 10 - w, 10, w, 20, Lang.tr("steinreplay.respawn")));
-        buttonList.add(new GuiButton(1, width - 10 - w, 34, w, 20, Lang.tr("steinreplay.leave")));
+        buttonList.add(
+                new GuiButton(RESPAWN, width - 10 - w, 10, w, 20, Lang.tr("steinreplay.respawn")));
+        buttonList.add(
+                new GuiButton(LEAVE, width - 10 - w, 34, w, 20, Lang.tr("steinreplay.leave")));
         enableButtons();
     }
 
@@ -71,11 +87,11 @@ final class ReplayScreen extends GuiScreen {
 
     @Override
     protected void actionPerformed(GuiButton button) {
-        if (button.id == 0) {
-            respawning = true;   // o replay fecha quando o jogador volta vivo
+        if (button.id == RESPAWN) {
+            respawning = true; // the replay closes when the player is alive again
             enableButtons();
             mod.respawn();
-        } else if (button.id == 1) {
+        } else if (button.id == LEAVE) {
             mod.leaveServer();
         }
     }
@@ -84,17 +100,16 @@ final class ReplayScreen extends GuiScreen {
     protected void keyTyped(char c, int key) {
         Session s = mod.session();
         if (s == null || !s.saved) {
-            return;   // replay da morte: nem o Esc (e a tela de morte; sai pelos botoes)
+            return; // death replay: not even Esc (it is the death screen; the buttons leave it)
         }
         switch (key) {
-            case 1 -> mod.finish();              // Esc: volta para a lista
-            case 57, 25 -> s.paused = !s.paused; // espaco, P
-            case 203 -> s.seek(-100);            // esquerda
-            case 205 -> s.seek(100);             // direita
-            case 200 -> s.speed = Math.min(Session.SPEEDS.length - 1, s.speed + 1);
-            case 208 -> s.speed = Math.max(0, s.speed - 1);
-            default -> {
-            }
+            case Keyboard.KEY_ESCAPE -> mod.finish(); // back to the list
+            case Keyboard.KEY_SPACE, Keyboard.KEY_P -> s.paused = !s.paused;
+            case Keyboard.KEY_LEFT -> s.seek(-SEEK);
+            case Keyboard.KEY_RIGHT -> s.seek(SEEK);
+            case Keyboard.KEY_UP -> s.speed = Math.min(Session.SPEEDS.length - 1, s.speed + 1);
+            case Keyboard.KEY_DOWN -> s.speed = Math.max(0, s.speed - 1);
+            default -> {}
         }
     }
 
@@ -102,8 +117,13 @@ final class ReplayScreen extends GuiScreen {
     protected void mouseClicked(int mouseX, int mouseY, int button) {
         super.mouseClicked(mouseX, mouseY, button);
         Session s = mod.session();
-        if (s != null && s.saved && button == 0 && mouseY >= barY() - 6 && mouseY <= barY() + 8
-                && mouseX >= barX() - 4 && mouseX <= barX() + barW() + 4) {
+        if (s != null
+                && s.saved
+                && button == 0
+                && mouseY >= barY() - 6
+                && mouseY <= barY() + 8
+                && mouseX >= barX() - 4
+                && mouseX <= barX() + barW() + 4) {
             float f = (mouseX - barX()) / (float) Math.max(1, barW());
             s.seek(Math.max(0, Math.min(1, f)) * (s.frames - 1) - s.time);
         }
@@ -115,71 +135,20 @@ final class ReplayScreen extends GuiScreen {
         if (s == null) {
             return;
         }
-        s.endHand();   // a mao de quem te matou ja foi desenhada: o jogador do cliente volta
-        killerHud(s);
+        s.endHand(); // the killer's hand is already drawn: the client player comes back
+        KillerHud.draw(s.killerNow(), width, height, height - BAR_H - 12);
         card(s);
         bar(s);
         float fade = s.fade(partialTicks);
         if (fade > 0) {
             Render.rect(0, 0, width, height, Render.alpha(0xFF000000, fade));
         }
-        super.drawScreen(mouseX, mouseY, partialTicks);   // os botoes, por cima do escurecimento
+        super.drawScreen(mouseX, mouseY, partialTicks); // the buttons, over the fade
     }
 
-    private static final String ICONS = "minecraft:textures/gui/icons.png";
-    private static final float PX = 1F / 256;
-
-    /**
-     * Nos olhos de quem te matou, a tela dele: a mira, os coracoes (piscando quando ele apanha) e a armadura, como o HUD
-     * do jogo desenha. A vida e a que o servidor mandou dele.
-     */
-    private void killerHud(Session s) {
-        Recorder.Snap k = s.killerNow();
-        if (k == null) {
-            return;
-        }
-        icon(width / 2 - 7, height / 2 - 7, 0, 0, 15);
-        if (k.health < 0) {
-            return;
-        }
-        int left = width / 2 - 91;
-        int y = height - BAR_H - 12;
-        int hp = (int) Math.ceil(k.health);
-        int hearts = (int) Math.ceil(Math.max(20, hp) / 2.0);
-        boolean blink = k.hurtTime > 0 && k.hurtTime / 3 % 2 == 1;
-        for (int i = 0; i < hearts; i++) {
-            int x = left + i % 10 * 8;
-            int hy = y - i / 10 * 10;
-            icon(x, hy, blink ? 25 : 16, 0, 9);
-            if (i * 2 + 1 < hp) {
-                icon(x, hy, 52, 0, 9);
-            } else if (i * 2 + 1 == hp) {
-                icon(x, hy, 61, 0, 9);
-            }
-        }
-        int armor = 0;
-        for (int slot = 1; slot <= 4; slot++) {
-            ItemStack it = k.equipment[slot];
-            if (it != null && it.getItem() instanceof ItemArmor a) {
-                armor += a.damageReduceAmount;
-            }
-        }
-        if (armor > 0) {
-            int ay = y - (hearts + 9) / 10 * 10;
-            for (int i = 0; i < 10; i++) {
-                int u = i * 2 + 1 < armor ? 34 : i * 2 + 1 == armor ? 25 : 16;
-                icon(left + i * 8, ay, u, 9, 9);
-            }
-        }
-    }
-
-    private static void icon(int x, int y, int u, int v, int size) {
-        Render.image(ICONS, x, y, size, size, u * PX, v * PX, (u + size) * PX, (v + size) * PX, 0xFFFFFFFF);
-    }
-
-    /** O card de quem te matou: a cabeca, o nome, o item na mao e a armadura, como estavam no golpe final. */
+    /** The killer's card: the head, the name, the held item and the armor, as at the final blow. */
     private void card(Session s) {
-        Recorder.Snap k = s.killerCard;
+        Snap k = s.killerCard;
         if (k == null || k.profile == null) {
             return;
         }
@@ -201,7 +170,7 @@ final class ReplayScreen extends GuiScreen {
         Render.text("§c" + sub, x + head + 14, y + 22, 0xFFFFFFFF, true);
         int ix = x + 8;
         int iy = y + head + 14;
-        // O item na mao primeiro, depois capacete, peitoral, calca e bota.
+        // The held item first, then helmet, chestplate, leggings and boots.
         int[] order = {0, 4, 3, 2, 1};
         for (int slot : order) {
             ItemStack it = k.equipment[slot];
@@ -212,7 +181,7 @@ final class ReplayScreen extends GuiScreen {
         }
     }
 
-    /** A largura da linha do tempo, e onde ela fica (o centro de baixo). */
+    /** The timeline's width, and where it is (the bottom center). */
     private int barW() {
         return Math.min(300, width - 60);
     }
@@ -226,8 +195,9 @@ final class ReplayScreen extends GuiScreen {
     }
 
     /**
-     * A linha do tempo, limpa: uma linha fina no centro de baixo com o ponto da morte em vermelho, o titulo e o tempo em
-     * cima dela, numa pilula translucida; no salvo, tambem a velocidade e, acima, as teclas.
+     * The timeline, clean: a thin line at the bottom center with the death point in red, the title
+     * and the time above it, in a translucent pill; in a saved replay, also the speed and, above,
+     * the keys.
      */
     private void bar(Session s) {
         int w = barW();
@@ -237,20 +207,36 @@ final class ReplayScreen extends GuiScreen {
         float f = Math.max(0, Math.min(1, s.time / last));
         float death = Math.max(0, Math.min(1, s.deathAt / last));
         Render.roundRect(x - 14, y - 17, w + 28, 26, 7, 0x58000000);
-        String title = Lang.tr("steinreplay.title").toUpperCase(java.util.Locale.ROOT);
+        String title = Lang.tr("steinreplay.title").toUpperCase(Locale.ROOT);
         Render.text(title, x, y - 12, 0xB0FFFFFF, Typeface.MONO, 6.5F);
-        String time = clock(s.time) + " / " + clock(last)
-                + (s.saved ? "   " + Session.SPEEDS[s.speed] + "x" : "")
-                + (s.saved && s.paused ? "   " + Lang.tr("steinreplay.paused").toUpperCase(java.util.Locale.ROOT) : "");
-        Render.text(time, x + w - Render.textWidth(time, Typeface.MONO, 6.5F), y - 12, 0xB0FFFFFF, Typeface.MONO, 6.5F);
+        String time =
+                clock(s.time)
+                        + " / "
+                        + clock(last)
+                        + (s.saved ? "   " + Session.SPEEDS[s.speed] + "x" : "")
+                        + (s.saved && s.paused
+                                ? "   " + Lang.tr("steinreplay.paused").toUpperCase(Locale.ROOT)
+                                : "");
+        Render.text(
+                time,
+                x + w - Render.textWidth(time, Typeface.MONO, 6.5F),
+                y - 12,
+                0xB0FFFFFF,
+                Typeface.MONO,
+                6.5F);
         Render.roundRect(x, y, w, 2.5F, 1.25F, 0x40FFFFFF);
         Render.roundRect(x, y, Math.max(2.5F, w * f), 2.5F, 1.25F, 0xF0FFFFFF);
         Render.circle(x + w * death, y + 1.25F, 2.5F, 0xFFE04848);
         Render.circle(x + w * f, y + 1.25F, 3F, 0xFFFFFFFF);
         if (s.saved) {
             String keys = Lang.tr("steinreplay.keysSaved");
-            Render.text(keys, (width - Render.textWidth(keys, Typeface.MONO, 6F)) / 2, y - 30, 0x90FFFFFF,
-                    Typeface.MONO, 6F);
+            Render.text(
+                    keys,
+                    (width - Render.textWidth(keys, Typeface.MONO, 6F)) / 2,
+                    y - 30,
+                    0x90FFFFFF,
+                    Typeface.MONO,
+                    6F);
         }
     }
 

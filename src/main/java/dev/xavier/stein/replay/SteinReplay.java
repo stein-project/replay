@@ -8,153 +8,144 @@
 
 package dev.xavier.stein.replay;
 
-import dev.xavier.stein.loader.api.Chat;
 import dev.xavier.stein.loader.api.Lang;
 import dev.xavier.stein.loader.api.Log;
 import dev.xavier.stein.loader.api.ModConfig;
 import dev.xavier.stein.loader.api.ModContext;
-import dev.xavier.stein.loader.api.Option;
 import dev.xavier.stein.loader.api.Page;
 import dev.xavier.stein.loader.api.Server;
 import dev.xavier.stein.loader.api.SteinMod;
-import java.io.File;
-import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.Date;
-import java.util.List;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.ISound;
 import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.client.gui.GuiMultiplayer;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.entity.Entity;
+
+import java.io.File;
+import java.util.List;
 
 /**
- * Replay da morte: o jogo guarda sempre os ultimos segundos dos jogadores em volta ({@link Recorder}). Quando voce
- * morre, o jogo segue em camera lenta por uns segundos, do jeito que estava ({@link DyingScreen}), escurece, e o replay
- * entra no lugar da tela de morte ({@link Session}, {@link ReplayScreen}): repete ate voce renascer, com os botoes de
- * renascer e de sair do servidor.
+ * Death replay: the game always keeps the last seconds of the players around ({@link Recorder}).
+ * When you die, the game goes on in slow motion for a few seconds, as it was ({@link
+ * DeathSlowMotion}, {@link DyingScreen}), fades to black, and the replay takes the death screen's
+ * place ({@link Session}, {@link ReplayScreen}): it loops until you respawn, with the respawn and
+ * leave-server buttons.
  *
- * <p>Cada replay da morte e salvo ({@link Recording}: os quadros e os blocos em volta) em
- * {@code steinloader/replays}. Pelo menu do Stein Loader (Configurar, no Replay) eles aparecem numa lista
- * ({@link ReplayList}) para assistir de novo — num mundo montado so com aqueles blocos ({@link ReplayWorld}) — ou
- * apagar; a pagina do Painel tambem lista e apaga.
+ * <p>Every death replay is saved ({@link SavedReplays}, {@link ReplayFile}: the frames and the
+ * blocks around) in {@code steinloader/replays}. From the Stein Loader menu (Configure, on Replay)
+ * they show in a list ({@link ReplayList}) to watch again — in a world built only from those blocks
+ * ({@link ReplayWorld}) — or delete; the Panel page lists and deletes them too ({@link
+ * ReplayPage}).
  *
- * <p>E so visual: le o que o cliente ja recebeu do servidor e nao manda nada. Os jogadores de verdade ficam escondidos
- * enquanto o replay toca.
+ * <p>It is visual only: it reads what the client already received from the server and sends
+ * nothing. The real players are hidden while the replay plays.
  */
 public final class SteinReplay implements SteinMod {
 
-    /** O maximo gravado, em segundos (o anel tem esse tamanho; a opcao escolhe quanto tocar). */
+    /** The most recorded, in seconds (the ring's size; the option picks how much to play). */
     static final int MAX_SECONDS = 30;
-    /** Replays salvos guardados; passando disso, o mais velho sai. */
-    static final int MAX_SAVED = 50;
-    static final String EXT = ".steinreplay";
 
-    static final class Config {
-        boolean enabled = true;
-        /** Quantos segundos tocar. */
-        int seconds = 15;
-        /** Salvar cada replay da morte. */
-        boolean save = true;
-    }
+    /** The least recorded for a replay (just joined or changed worlds: the game's death screen). */
+    private static final int MIN_RECORDED = 100;
+
+    /** Ticks recorded after the death: the body falling (one second) and the items scattering. */
+    private static final int AFTER_DEATH = 60;
+
+    /**
+     * {@code -Dsteinreplay.watchAtSec=N}: N seconds after the game opens, on the menu, watches the
+     * newest saved replay — to check the replay world without clicking the list.
+     */
+    private static final long WATCH_AT = Long.getLong("steinreplay.watchAtSec", -1L);
 
     private final ModContext ctx = ModContext.of(this);
     private final Log log = ctx.log();
-    private final ModConfig<Config> config = ModConfig.of("steinreplay", Config.class);
+    private final ModConfig<ReplayConfig> config = ctx.config(ReplayConfig.class);
     private final Recorder recorder = new Recorder(MAX_SECONDS * 20);
+    private final SavedReplays files = new SavedReplays(log);
+    private final ReplayPage page = new ReplayPage(config, files);
+    private final DeathSlowMotion dying = new DeathSlowMotion();
+    private final long started = System.nanoTime();
 
     private Session session;
-    /** De onde veio o replay salvo que esta tocando (a lista), para voltar a ela. */
+
+    /** Where the saved replay playing came from (the list), to go back to it. */
     private GuiScreen savedBack;
-    /** Esta morte ja teve replay (ou foi pulada): a tela de morte que voltar nao abre outro. */
+
+    /** This death already had its replay (or skipped it): a death screen coming back opens none. */
     private boolean shownThisDeath;
-    /** A lista da pagina do Painel, lida quando ele abre. */
-    private List<Recording> pageList = new ArrayList<>();
+
+    /** The world of the last tick: when it changes, everything starts over. */
+    private Object lastWorld;
+
+    /** The current death replay (saved at the end, with the seconds after the death). */
+    private Recording live;
+
+    /** Ticks of {@link #live} recorded after the death. */
+    private int afterDeath;
+
+    /** Where you died: your player stays there while the replay plays (a spectator would sink). */
+    private double deadX;
+
+    private double deadY;
+    private double deadZ;
+    private boolean watchTested;
 
     Session session() {
         return session;
     }
 
-    File replaysDir() {
-        return new File(Minecraft.getMinecraft().mcDataDir, "steinloader/replays");
+    SavedReplays files() {
+        return files;
     }
 
     @Override
     public void afterStartGame() {
-        log.info("iniciado (" + (config.get().enabled ? "ligado" : "desligado") + ", " + saved().size()
-                + " replay(s) salvo(s))");
+        log.info(
+                "started ("
+                        + (config.get().enabled ? "on" : "off")
+                        + ", "
+                        + files.saved().size()
+                        + " saved replay(s))");
     }
 
     @Override
     public void onJoinGame() {
         recorder.clear();
-        if (dying >= 0) {
-            dying = -1;
-            timerSpeed(1);
+        if (dying.active()) {
+            dying.stop(Minecraft.getMinecraft());
         }
         shownThisDeath = false;
     }
-
-    /**
-     * {@code -Dsteinreplay.watchAtSec=N}: N segundos depois de abrir o jogo, no menu, assiste o replay salvo mais novo —
-     * para conferir o mundo do replay sem clicar na lista.
-     */
-    private static final long WATCH_AT = Long.getLong("steinreplay.watchAtSec", -1L);
-    private final long started = System.nanoTime();
-    private boolean watchTested;
 
     @Override
     public void onTickEnd() {
         Minecraft mc = Minecraft.getMinecraft();
         if (session != null) {
-            session.endHand();   // por garantia: a tela devolve o jogador logo depois da mao
+            session.endHand(); // just in case: the screen gives the player back right after the
+            // hand
         }
-        if (WATCH_AT >= 0 && !watchTested && mc.theWorld == null
-                && System.nanoTime() - started > WATCH_AT * 1_000_000_000L) {
-            watchTested = true;
-            List<File> fs = files();
-            String why = fs.isEmpty() ? "nenhum replay salvo" : watch(fs.get(0), new ReplayList(this, null));
-            log.info("teste de assistir: " + (why.isEmpty() ? fs.get(0).getName() : why));
-        }
+        watchTest(mc);
         if (mc.theWorld != lastWorld && (session == null || !session.saved)) {
             lastWorld = mc.theWorld;
             worldChanged(mc);
         }
         if (session != null && session.saved) {
             if (mc.theWorld == null) {
-                session = null;   // o mundo do replay fechou por fora
+                session = null; // the replay's world was closed from outside
                 return;
             }
             session.tick();
             session.finished();
             return;
         }
-        if (dying >= 0) {
+        if (dying.active()) {
             tickDying(mc);
             return;
         }
         if (session != null) {
-            if (mc.thePlayer == null || mc.theWorld == null || mc.thePlayer.getHealth() > 0
-                    || mc.currentScreen != null && !(mc.currentScreen instanceof ReplayScreen)) {
-                finish();   // renasceu, saiu do mundo ou outra tela entrou
-                return;
-            }
-            mc.thePlayer.setPosition(deadX, deadY, deadZ);
-            mc.thePlayer.motionX = 0;
-            mc.thePlayer.motionY = 0;
-            mc.thePlayer.motionZ = 0;
-            // Os segundos depois da morte (o corpo caindo, os itens se espalhando) entram enquanto o replay ja toca.
-            if (session.growing) {
-                if (afterDeath < AFTER_DEATH) {
-                    live.extend(mc);
-                    afterDeath++;
-                } else {
-                    session.growing = false;
-                }
-            }
-            session.tick();
+            tickDeathReplay(mc);
             return;
         }
         if (mc.thePlayer == null) {
@@ -165,34 +156,77 @@ public final class SteinReplay implements SteinMod {
             recorder.record(mc);
             return;
         }
-        // Morreu: a morte em camera lenta (o jogo como esta, sem mexer em nada), o escurecimento e o replay no lugar da
-        // tela de morte. Sem gravacao que preste (acabou de entrar) ou no hardcore, fica a tela de morte do jogo.
-        if (!shownThisDeath && config.get().enabled && recorder.size() >= MIN_RECORDED && recorder.hasSelf()
+        // Died: the death in slow motion (the game as it is, nothing touched), the fade and the
+        // replay in place of the death screen. Without a usable recording (just joined) or in
+        // hardcore, the game's death screen stays.
+        if (!shownThisDeath
+                && config.get().enabled
+                && recorder.size() >= MIN_RECORDED
+                && recorder.hasSelf()
                 && !mc.theWorld.getWorldInfo().isHardcoreModeEnabled()) {
             shownThisDeath = true;
-            dying = 0;
             deadX = mc.thePlayer.posX;
             deadY = mc.thePlayer.posY;
             deadZ = mc.thePlayer.posZ;
-            timerSpeed(DYING_SPEED);
-            mc.displayGuiScreen(new DyingScreen(this));
+            dying.start(mc);
+            mc.displayGuiScreen(new DyingScreen(dying));
             recorder.record(mc);
         }
     }
 
-    /** O mundo do ultimo tick: trocou (saiu e voltou, outro servidor no mesmo proxy, outra dimensao), tudo recomeca. */
-    private Object lastWorld;
+    /** {@link #WATCH_AT}: once, on the menu. */
+    private void watchTest(Minecraft mc) {
+        if (WATCH_AT < 0
+                || watchTested
+                || mc.theWorld != null
+                || System.nanoTime() - started <= WATCH_AT * 1_000_000_000L) {
+            return;
+        }
+        watchTested = true;
+        List<File> fs = files.list();
+        String why =
+                fs.isEmpty() ? "no saved replay" : watch(fs.get(0), new ReplayList(this, null));
+        log.info("watch test: " + (why.isEmpty() ? fs.get(0).getName() : why));
+    }
 
     /**
-     * Mundo novo: a gravacao do anterior nao vale mais, e a morte em camera lenta ou o replay que estavam no meio acabam
-     * (com o jogador morto no mundo novo, a tela de morte do jogo abre sozinha).
+     * A tick of the death replay: it ends when the player respawns, leaves or another screen opens.
+     */
+    private void tickDeathReplay(Minecraft mc) {
+        if (mc.thePlayer == null
+                || mc.theWorld == null
+                || mc.thePlayer.getHealth() > 0
+                || mc.currentScreen != null && !(mc.currentScreen instanceof ReplayScreen)) {
+            finish();
+            return;
+        }
+        mc.thePlayer.setPosition(deadX, deadY, deadZ);
+        mc.thePlayer.motionX = 0;
+        mc.thePlayer.motionY = 0;
+        mc.thePlayer.motionZ = 0;
+        // The seconds after the death (the body falling, the items scattering) come in while the
+        // replay already plays.
+        if (session.growing) {
+            if (afterDeath < AFTER_DEATH) {
+                live.extend(mc);
+                afterDeath++;
+            } else {
+                session.growing = false;
+            }
+        }
+        session.tick();
+    }
+
+    /**
+     * A new world: the previous one's recording no longer applies, and the slow-motion death or the
+     * replay in progress end (with the player dead in the new world, the game's death screen opens
+     * by itself).
      */
     private void worldChanged(Minecraft mc) {
         recorder.clear();
         shownThisDeath = false;
-        if (dying >= 0) {
-            dying = -1;
-            timerSpeed(1);
+        if (dying.active()) {
+            dying.stop(mc);
             if (mc.currentScreen instanceof DyingScreen) {
                 mc.displayGuiScreen(null);
             }
@@ -203,50 +237,38 @@ public final class SteinReplay implements SteinMod {
     }
 
     /**
-     * Um tick da morte em camera lenta: o jogo segue gravando (o corpo caindo, os itens), a tela escurece no fim e o
-     * replay entra. Se o jogador renascer antes (servidor que renasce sozinho), volta tudo.
+     * A tick of the slow-motion death: the game keeps recording (the body falling, the items), the
+     * screen fades at the end and the replay comes in. If the player respawns before (a server that
+     * respawns by itself), everything goes back.
      */
     private void tickDying(Minecraft mc) {
         if (mc.thePlayer == null || mc.theWorld == null || mc.thePlayer.getHealth() > 0) {
-            dying = -1;
-            timerSpeed(1);
+            dying.stop(mc);
             if (mc.currentScreen instanceof DyingScreen) {
                 mc.displayGuiScreen(null);
             }
             return;
         }
         recorder.record(mc);
-        if (++dying >= DYING_TICKS) {
-            dying = -1;
-            timerSpeed(1);
+        if (dying.tick(mc)) {
             start(mc);
         }
     }
 
-    /** O vermelho da morte agora (0 a 1): entra em dois ticks, para ver na hora que morreu (e nao parecer travamento). */
-    float dyingRed(float partialTicks) {
-        return dying < 0 ? 0 : Math.min(1, (dying + partialTicks) / 2F);
-    }
-
-    /** A fracao do escurecimento da morte agora (0 a 1), no quadro. */
-    float dyingFade(float partialTicks) {
-        return dying < 0 ? 1 : Math.max(0, Math.min(1, (dying + partialTicks - FADE_FROM) / (DYING_TICKS - FADE_FROM)));
-    }
-
     /**
-     * Monta o replay da morte e abre. Se algo der errado, a tela de morte do jogo (ela abre sozinha com o jogador morto e
-     * nenhuma tela por cima).
+     * Builds the death replay and opens it. If anything goes wrong, the game's death screen (it
+     * opens by itself with the player dead and no screen on top).
      */
     private void start(Minecraft mc) {
         try {
             startReplay(mc);
         } catch (RuntimeException e) {
-            log.error("replay da morte indisponivel, fica a tela de morte do jogo", e);
+            log.error("death replay unavailable, the game's death screen stays", e);
             Session s = session;
             session = null;
             live = null;
             if (s != null) {
-                s.close(mc);
+                s.close();
             }
             mc.displayGuiScreen(null);
         }
@@ -255,51 +277,25 @@ public final class SteinReplay implements SteinMod {
     private void startReplay(Minecraft mc) {
         int want = Math.max(5, Math.min(MAX_SECONDS, config.get().seconds)) * 20;
         Recording r = Recording.capture(mc, recorder, Server.address());
-        r.trimStart(Math.max(0, r.size() - DYING_TICKS - want));   // so o trecho que toca (e que vai para o disco)
-        session = new Session(mc, r, false);
+        // Only the stretch that plays (and goes to disk).
+        r.trimStart(Math.max(0, r.size() - DeathSlowMotion.TICKS - want));
+        session = new Session(mc, r, false, log);
         r.setKiller(session.killerName);
         session.growing = true;
         session.fadeIn();
         live = r;
-        afterDeath = DYING_TICKS;   // os ticks da morte em camera lenta ja estao gravados
+        afterDeath = DeathSlowMotion.TICKS; // the slow-motion ticks are already recorded
         mc.displayGuiScreen(new ReplayScreen(this));
-        log.info("replay da morte: " + r.size() / 20 + " s gravados"
-                + (session.killerName != null ? ", por " + session.killerName : ""));
+        log.info(
+                "death replay: "
+                        + r.size() / 20
+                        + " s recorded"
+                        + (session.killerName != null ? ", by " + session.killerName : ""));
     }
 
-    /** O minimo gravado para haver replay (acabou de entrar ou de trocar de mundo: fica a tela de morte do jogo). */
-    private static final int MIN_RECORDED = 100;
-    /** Ticks gravados depois da morte: o corpo caindo (um segundo) e os itens se espalhando. */
-    private static final int AFTER_DEATH = 60;
-    /** A morte em camera lenta: ticks de jogo, a velocidade do jogo nela e o tick em que comeca a escurecer. */
-    private static final int DYING_TICKS = 30;
-    private static final float DYING_SPEED = 0.4F;
-    private static final int FADE_FROM = 21;
-    /** Ticks da morte em camera lenta (-1: fora dela). */
-    private int dying = -1;
-    /** O replay da morte de agora (salvo no fim, com os segundos depois da morte) e quantos ticks ja entraram. */
-    private Recording live;
-    private int afterDeath;
-    /** Onde voce morreu: o seu jogador fica ali enquanto o replay toca (como espectador ele nao colide e afundaria). */
-    private double deadX;
-    private double deadY;
-    private double deadZ;
-    private static java.lang.reflect.Field timerField;
-
-    /** A velocidade do relogio do jogo (1 = normal): so o cliente anda devagar, o servidor segue igual. */
-    private void timerSpeed(float speed) {
-        try {
-            if (timerField == null) {
-                timerField = Minecraft.class.getDeclaredField("field_71428_T");
-                timerField.setAccessible(true);
-            }
-            ((net.minecraft.util.Timer) timerField.get(Minecraft.getMinecraft())).timerSpeed = speed;
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            log.warn("camera lenta indisponivel: " + e);
-        }
-    }
-
-    /** Renascer (o botao do replay): o pedido vai ao servidor e o replay fecha quando o jogador volta vivo. */
+    /**
+     * Respawn (the replay's button): the request goes to the server, the replay closes when alive.
+     */
     void respawn() {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc.thePlayer != null) {
@@ -307,7 +303,7 @@ public final class SteinReplay implements SteinMod {
         }
     }
 
-    /** Sair do servidor (o botao do replay): para a lista de servidores, ou o menu, num mundo local. */
+    /** Leave the server (the replay's button): to the server list, or the menu in a local world. */
     void leaveServer() {
         Minecraft mc = Minecraft.getMinecraft();
         boolean local = mc.isIntegratedServerRunning();
@@ -319,50 +315,11 @@ public final class SteinReplay implements SteinMod {
         mc.displayGuiScreen(local ? new GuiMainMenu() : new GuiMultiplayer(new GuiMainMenu()));
     }
 
-    /** Grava noutra thread (o jogo nao espera o disco) e tira os mais velhos que passam do limite. */
-    private void saveLater(Recording r) {
-        File f = new File(replaysDir(), new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss").format(new Date(r.when)) + EXT);
-        Thread t = new Thread(() -> {
-            try {
-                r.save(f);
-                List<File> files = files();
-                for (int i = MAX_SAVED; i < files.size(); i++) {
-                    files.get(i).delete();
-                }
-                log.info("replay salvo: " + f.getName() + " (" + f.length() / 1024 + " KB)");
-            } catch (Exception e) {
-                log.error("nao salvou o replay " + f, e);
-            }
-        }, "Stein Replay");
-        t.setDaemon(true);
-        t.start();
-    }
-
-    /** Os arquivos de replay, do mais novo ao mais velho. */
-    private List<File> files() {
-        File[] fs = replaysDir().listFiles((d, n) -> n.endsWith(EXT));
-        List<File> out = new ArrayList<>(fs == null ? List.of() : Arrays.asList(fs));
-        out.sort(Comparator.comparing(File::getName).reversed());
-        return out;
-    }
-
-    /** Os replays salvos (so o cabecalho de cada um), do mais novo ao mais velho. */
-    List<Recording> saved() {
-        List<Recording> out = new ArrayList<>();
-        for (File f : files()) {
-            try {
-                out.add(Recording.header(f));
-            } catch (Exception e) {
-                log.warn("replay ilegivel: " + f.getName() + " (" + e.getMessage() + ")");
-            }
-        }
-        return out;
-    }
-
     /**
-     * Assiste um replay salvo (fora de uma partida): monta o mundo dele e toca, e no fim volta para {@code back}.
+     * Watches a saved replay (outside a match): builds its world and plays it, and at the end goes
+     * back to {@code back}.
      *
-     * @return "" ou o motivo de nao abrir, para a lista mostrar
+     * @return "" or why it did not open, for the list to show
      */
     String watch(File f, GuiScreen back) {
         Minecraft mc = Minecraft.getMinecraft();
@@ -370,43 +327,45 @@ public final class SteinReplay implements SteinMod {
             return Lang.tr("steinreplay.leaveToWatch");
         }
         try {
-            Recording r = Recording.load(f);
+            Recording r = ReplayFile.load(f);
             if (r.size() < 2 || !ReplayWorld.open(mc, r, back)) {
                 return Lang.tr("steinreplay.cantOpen");
             }
             savedBack = back;
-            session = new Session(mc, r, true);
+            session = new Session(mc, r, true, log);
             mc.displayGuiScreen(new ReplayScreen(this));
-            log.info("assistindo " + f.getName());
+            log.info("watching " + f.getName());
             return "";
         } catch (Exception e) {
-            log.error("nao abriu o replay " + f, e);
+            log.error("could not open the replay " + f, e);
             ReplayWorld.close(mc, back);
             return Lang.tr("steinreplay.cantOpen");
         }
     }
 
     /**
-     * Fim do replay. Da morte (o jogador renasceu, saiu, ou outra tela entrou): camera e HUD de volta, e o replay e salvo.
-     * Salvo: fecha o mundo do replay e volta para a lista.
+     * End of the replay. A death replay (the player respawned, left, or another screen opened):
+     * camera and HUD back, and the replay is saved. A saved one: closes the replay's world and goes
+     * back to the list.
      */
     void finish() {
         Minecraft mc = Minecraft.getMinecraft();
         Session s = session;
         session = null;
         if (s != null) {
-            s.close(mc);
+            s.close();
         }
         if (s != null && s.saved) {
             GuiScreen back = savedBack;
             savedBack = null;
-            ReplayWorld.close(mc, back instanceof ReplayList ? new ReplayList(this, ((ReplayList) back).parent())
-                    : back);
+            ReplayWorld.close(
+                    mc,
+                    back instanceof ReplayList list ? new ReplayList(this, list.parent()) : back);
             return;
         }
         recorder.clear();
         if (live != null && config.get().save) {
-            saveLater(live);   // com os segundos depois da morte que deu tempo de gravar
+            files.saveLater(live); // with the seconds after the death there was time to record
         }
         live = null;
         if (mc.currentScreen instanceof ReplayScreen) {
@@ -415,17 +374,18 @@ public final class SteinReplay implements SteinMod {
     }
 
     /**
-     * Enquanto o replay toca some todo o mundo de verdade (jogadores, mobs, itens, o que ficou no lugar depois da morte)
-     * e ficam so as copias do replay.
+     * While the replay plays the whole real world goes away (players, mobs, items, what stayed in
+     * place after the death) and only the replay's copies remain.
      */
     @Override
     public boolean onHideEntity(Object entity) {
-        return session != null && entity instanceof net.minecraft.entity.Entity && !session.isActor(entity);
+        return session != null && entity instanceof Entity && !session.isActor(entity);
     }
 
     /**
-     * Cada som do mundo (com posicao, sem repetir) entra na gravacao; enquanto o replay toca, os do mundo de verdade
-     * ficam mudos (a musica e os cliques de tela seguem) e so tocam os gravados.
+     * Every world sound (with a position, not repeating) goes into the recording; while the replay
+     * plays, the real world's are muted (the music and screen clicks go on) and only the recorded
+     * ones play.
      */
     @Override
     public Object onPlaySound(Object sound) {
@@ -434,7 +394,12 @@ public final class SteinReplay implements SteinMod {
         }
         boolean world = s.getAttenuationType() == ISound.AttenuationType.LINEAR;
         if (world && !s.canRepeat() && s.getSoundLocation() != null) {
-            ParticleTap.sound(s.getSoundLocation().toString(), s.getXPosF(), s.getYPosF(), s.getZPosF(), s.getVolume(),
+            ParticleTap.sound(
+                    s.getSoundLocation().toString(),
+                    s.getXPosF(),
+                    s.getYPosF(),
+                    s.getZPosF(),
+                    s.getVolume(),
                     s.getPitch());
         }
         return world && session != null ? null : sound;
@@ -443,7 +408,7 @@ public final class SteinReplay implements SteinMod {
     @Override
     public void onRenderWorld(float partialTicks) {
         if (session != null) {
-            session.render(Minecraft.getMinecraft(), partialTicks);
+            session.render();
         }
     }
 
@@ -452,7 +417,7 @@ public final class SteinReplay implements SteinMod {
         config.save();
     }
 
-    /** O Configurar do menu do Stein Loader: a lista dos replays salvos. */
+    /** Configure, on the Stein Loader menu: the list of saved replays. */
     @Override
     public Object configScreen(Object parent) {
         return new ReplayList(this, (GuiScreen) parent);
@@ -460,50 +425,6 @@ public final class SteinReplay implements SteinMod {
 
     @Override
     public void onPage(Page page) {
-        Config c = config.get();
-        page.icon("loop");
-        page.section(tr("steinreplay.title"));
-        page.option(Option.toggle(tr("steinreplay.enabled"), () -> c.enabled, v -> {
-            c.enabled = v;
-            config.saveSoon();
-        }));
-        page.option(Option.slider(tr("steinreplay.seconds"), 5, MAX_SECONDS, 5, () -> c.seconds, v -> {
-            c.seconds = (int) Math.round(v);
-            config.saveSoon();
-        }, v -> Math.round(v) + " s"));
-        page.option(Option.toggle(tr("steinreplay.save"), () -> c.save, v -> {
-            c.save = v;
-            config.saveSoon();
-        }));
-        page.restore(() -> {
-            Config d = new Config();
-            c.enabled = d.enabled;
-            c.seconds = d.seconds;
-            c.save = d.save;
-            config.save();
-        });
-
-        // Os salvos: clicar diz onde assistir (fora da partida), a lixeira apaga.
-        page.section(tr("steinreplay.saved"));
-        pageList = saved();
-        page.rows(() -> {
-            List<Page.Item> rows = new ArrayList<>();
-            for (Recording r : pageList) {
-                String when = new SimpleDateFormat("dd/MM HH:mm").format(new Date(r.when));
-                String title = when + (r.server.isEmpty() ? "" : "  §7" + r.server);
-                String detail = (r.killer.isEmpty() ? "" : r.killer + " · ") + r.length / 20 + " s";
-                rows.add(new Page.Item(title, detail, false, () -> Chat.print("§7" + tr("steinreplay.watchHint")),
-                        () -> {
-                            if (r.file.delete()) {
-                                pageList.remove(r);
-                            }
-                        }));
-            }
-            return rows;
-        }, tr("steinreplay.none"));
-    }
-
-    private static String tr(String key) {
-        return Lang.tr(key);
+        this.page.build(page);
     }
 }

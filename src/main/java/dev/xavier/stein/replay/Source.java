@@ -8,11 +8,14 @@
 
 package dev.xavier.stein.replay;
 
-/** De onde o replay le os quadros: o anel de agora ({@link Recorder}) ou um replay salvo ({@link Recording}). */
+/**
+ * Where a replay reads its frames from: the live ring ({@link Recorder}) or a saved replay ({@link
+ * Recording}).
+ */
 interface Source {
 
     int size();
 
-    /** O quadro i, do mais velho (0) ao mais novo (size - 1). */
-    Recorder.Frame frame(int i);
+    /** Frame i, from the oldest (0) to the newest (size - 1). */
+    Frame frame(int i);
 }

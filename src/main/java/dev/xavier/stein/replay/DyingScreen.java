@@ -9,22 +9,24 @@
 package dev.xavier.stein.replay;
 
 import dev.xavier.stein.loader.api.Render;
+
 import net.minecraft.client.gui.GuiScreen;
 
 /**
- * A morte em camera lenta, antes do replay: uma tela transparente (o jogo, o HUD e a camera seguem como estavam, nada e
- * escondido nem mexido) so para a tela de morte do jogo nao abrir, que fica vermelha na hora da morte (para nao
- * parecer que o jogo travou) e escurece no fim. O jogo anda devagar enquanto ela esta aberta ({@link SteinReplay}).
+ * The death in slow motion, before the replay: a transparent screen (the game, the HUD and the
+ * camera go on as they were, nothing is hidden or moved) only so the game's death screen does not
+ * open, which turns red at the moment of death (so it does not look like the game froze) and fades
+ * to black at the end. The game runs slowly while it is open ({@link DeathSlowMotion}).
  */
 final class DyingScreen extends GuiScreen {
 
-    /** O vermelho da morte, por cima do jogo. */
+    /** The death red, over the game. */
     private static final int RED = 0x70C00000;
 
-    private final SteinReplay mod;
+    private final DeathSlowMotion dying;
 
-    DyingScreen(SteinReplay mod) {
-        this.mod = mod;
+    DyingScreen(DeathSlowMotion dying) {
+        this.dying = dying;
     }
 
     @Override
@@ -34,16 +36,16 @@ final class DyingScreen extends GuiScreen {
 
     @Override
     protected void keyTyped(char c, int key) {
-        // nem o Esc: a morte segue ate o replay
+        // Not even Esc: the death goes on until the replay.
     }
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        float red = mod.dyingRed(partialTicks);
+        float red = dying.red(partialTicks);
         if (red > 0) {
             Render.rect(0, 0, width, height, Render.alpha(RED, red));
         }
-        float f = mod.dyingFade(partialTicks);
+        float f = dying.fade(partialTicks);
         if (f > 0) {
             Render.rect(0, 0, width, height, Render.alpha(0xFF000000, f));
         }

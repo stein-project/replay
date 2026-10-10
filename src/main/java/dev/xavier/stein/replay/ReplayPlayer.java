@@ -9,27 +9,36 @@
 package dev.xavier.stein.replay;
 
 import com.mojang.authlib.GameProfile;
+
 import dev.xavier.stein.loader.api.Render;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.AbstractClientPlayer;
 import net.minecraft.client.entity.EntityOtherPlayerMP;
 import net.minecraft.client.entity.EntityPlayerSP;
-import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.client.renderer.entity.RenderPlayer;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.world.World;
 
+import java.util.UUID;
+
 /**
- * Um jogador do replay, com a skin pelo nick como no Tab ({@link Render#playerSkin}): a que o servidor mandou e, num
- * servidor sem autenticacao, a da conta original com aquele nick. O jogo sozinho so acharia a skin pelo UUID na lista
- * de jogadores — e no replay o "voce" gravado tem outro UUID, e num servidor offline ninguem tem skin.
+ * A replay player, with the skin by nick as in the Tab list ({@link Render#playerSkin}): the one
+ * the server sent and, on a server without authentication, the original account's skin for that
+ * nick. The game alone would only find the skin by UUID in the player list — and in the replay the
+ * recorded "you" has another UUID, and on an offline server nobody has a skin.
  */
 final class ReplayPlayer extends EntityOtherPlayerMP {
 
+    private static final String PREFIX = "stein_replay_";
+    private static boolean registered;
+
     private final String nick;
-    /** O tempo de morte (ticks, com fracao) no estado de antes e no de agora: o tombo sai liso em camera lenta. */
+
+    /** The death time (ticks, with fraction) before and now: the fall is smooth in slow motion. */
     float deathPrev;
+
     float deathNow;
 
     ReplayPlayer(World world, GameProfile profile, String nick) {
@@ -42,42 +51,33 @@ final class ReplayPlayer extends EntityOtherPlayerMP {
         return skin(nick, super.getLocationSkin());
     }
 
-    /** O desenho do corpo do replay (o {@link Body}), quando registrado; senao o do jogo. */
+    /** The replay's body renderer ({@link Body}), once registered; otherwise the game's. */
     @Override
     public String getSkinType() {
         String t = super.getSkinType();
         return registered ? PREFIX + t : t;
     }
 
-    private static final String PREFIX = "stein_replay_";
-    private static boolean registered;
-
     /**
-     * Poe no jogo os desenhos de corpo do replay, um para cada modelo de braco (largo e fino), pelo tipo de skin que o
-     * {@link #getSkinType} devolve. Uma vez so.
+     * Puts the replay's body renderers in the game, one for each arm model (wide and slim), under
+     * the skin type that {@link #getSkinType} returns. Once.
      */
-    @SuppressWarnings("unchecked")
     static void register(Minecraft mc) {
         if (registered) {
             return;
         }
-        try {
-            java.lang.reflect.Field f = RenderManager.class.getDeclaredField("field_178636_l");
-            f.setAccessible(true);
-            java.util.Map<String, RenderPlayer> skins =
-                    (java.util.Map<String, RenderPlayer>) f.get(mc.getRenderManager());
-            skins.put(PREFIX + "default", new Body(mc.getRenderManager(), false));
-            skins.put(PREFIX + "slim", new Body(mc.getRenderManager(), true));
-            registered = true;
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            System.out.println("[steinreplay] corpo do replay indisponivel: " + e);
-        }
+        RenderManager manager = mc.getRenderManager();
+        manager.skinMap.put(PREFIX + "default", new Body(manager, false));
+        manager.skinMap.put(PREFIX + "slim", new Body(manager, true));
+        registered = true;
     }
 
     /**
-     * O corpo de um jogador do replay. O jogo tomba o corpo morto por um contador inteiro de ticks mais a fracao do
-     * quadro; com o replay em camera lenta o contador anda meio tick por tick e o tombo saia aos trancos. Aqui o tombo
-     * vem do tempo de morte continuo do replay. O resto e o desenho do jogo.
+     * The body of a replay player. The game tips a dead body over by a whole tick counter plus the
+     * frame's fraction; with the replay in slow motion the counter moves half a tick per tick and
+     * the fall came out in jerks. Here the fall comes from the replay's continuous death time,
+     * handed to the game's own corpse rotation as a whole part and a fraction. The rest is the
+     * game's drawing.
      */
     static final class Body extends RenderPlayer {
 
@@ -86,15 +86,25 @@ final class ReplayPlayer extends EntityOtherPlayerMP {
         }
 
         @Override
-        protected void rotateCorpse(AbstractClientPlayer p, float age, float yaw, float partialTicks) {
+        protected void rotateCorpse(
+                AbstractClientPlayer p, float age, float yaw, float partialTicks) {
             if (!(p instanceof ReplayPlayer r) || r.deathNow <= 0) {
                 super.rotateCorpse(p, age, yaw, partialTicks);
                 return;
             }
-            GlStateManager.rotate(180.0F - yaw, 0.0F, 1.0F, 0.0F);
+            // The game turns by sqrt((deathTime + partialTicks - 1) / 20 * 1.6) of the maximum:
+            // the continuous death time d goes in as deathTime = floor(d) and partialTicks = the
+            // rest. Before the first tick (d < 1) the angle is 0, which deathTime 1 gives too.
             float d = r.deathPrev + (r.deathNow - r.deathPrev) * partialTicks;
-            float f = (float) Math.sqrt(Math.max(0, (d - 1) / 20 * 1.6F));
-            GlStateManager.rotate(Math.min(1, f) * getDeathMaxRotation(p), 0.0F, 0.0F, 1.0F);
+            int whole = Math.max(1, (int) Math.floor(d));
+            float rest = d >= 1 ? d - whole : 0;
+            int deathTime = p.deathTime;
+            p.deathTime = whole;
+            try {
+                super.rotateCorpse(p, age, yaw, rest);
+            } finally {
+                p.deathTime = deathTime;
+            }
         }
     }
 
@@ -103,13 +113,20 @@ final class ReplayPlayer extends EntityOtherPlayerMP {
         return r instanceof ResourceLocation l ? l : fallback;
     }
 
-    /** O jogador do cliente no lugar de quem te matou, enquanto a mao dele e desenhada: o braco com a skin dele. */
+    /**
+     * The client player in the killer's place while their hand is drawn: the arm with their skin.
+     */
     static final class Hand extends EntityPlayerSP {
 
         String nick;
 
         Hand(Minecraft mc, World world) {
             super(mc, world, mc.getNetHandler(), mc.thePlayer.getStatFileWriter());
+        }
+
+        /** The arm model (slim or wide) comes from the player list, by this UUID. */
+        void setUuid(UUID id) {
+            entityUniqueID = id;
         }
 
         @Override

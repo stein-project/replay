@@ -16,58 +16,56 @@ import net.minecraft.world.IWorldAccess;
 import net.minecraft.world.World;
 
 /**
- * As particulas e os sons do mundo, para o replay: um ouvinte do mundo do cliente (como o RenderGlobal), que guarda cada
- * particula pedida ({@code World.spawnParticle}: golpe critico, poeira da morte, pocao, passos, chuva...) e cada efeito de
- * bloco ({@code playAuxSFX}: bloco quebrando, pocao arremessada estourando) ate {@link Recorder#RADIUS} blocos de voce.
- * O {@link Recorder} leva o que chegou no tick para o quadro, e a {@link Session} pede tudo de novo na hora certa.
+ * The world's particles and sounds, for the replay: a listener of the client world (like the game's
+ * own world renderer) that keeps every particle asked for ({@code World.spawnParticle}: critical
+ * hit, death dust, potion, footsteps, rain...) and every block effect ({@code playAuxSFX}: block
+ * breaking, splash potion) up to {@link Recorder#RADIUS} blocks from you. The {@link Recorder}
+ * moves what arrived in the tick into the frame, and the replay asks for all of it again at the
+ * right time ({@link ReplayEffects}).
  *
- * <p>So guarda numeros (tipo, posicao, velocidade e ate dois parametros) em vetores fixos: nada e alocado por particula.
+ * <p>It only keeps numbers (type, position, speed and up to two parameters) in fixed arrays:
+ * nothing is allocated per particle.
  */
 final class ParticleTap implements IWorldAccess {
 
-    /** Particulas e efeitos de bloco por tick, no maximo (o resto do tick fica de fora). */
+    /** Particles, block effects and sounds per tick, at most (the rest of the tick is left out). */
     static final int MAX_PARTICLES = 128;
+
     static final int MAX_AUX = 16;
     static final int MAX_SOUNDS = 32;
 
     private static final ParticleTap INSTANCE = new ParticleTap();
     private static World attached;
-    /** O replay esta pedindo as particulas gravadas: nao sao gravadas de novo. */
+
+    /** The replay is asking for the recorded particles: they are not recorded again. */
     static boolean replaying;
 
-    /** O que chegou neste tick, ainda sem quadro. */
-    private final Recorder.Events pending = new Recorder.Events();
+    /** What arrived in this tick, not in a frame yet. */
+    private final Events pending = new Events();
 
-    private ParticleTap() {
-    }
+    private ParticleTap() {}
 
-    /** Ouve o mundo de agora (uma vez por mundo); um mundo novo comeca sem nada pendente. */
+    /** Listens to the current world (once per world); a new world starts with nothing pending. */
     static void attach(World world) {
         if (world == null || world == attached) {
             return;
         }
         world.addWorldAccess(INSTANCE);
         attached = world;
-        INSTANCE.pending.count = 0;
-        INSTANCE.pending.auxCount = 0;
-        INSTANCE.pending.soundCount = 0;
+        INSTANCE.pending.clear();
     }
 
-    /** Leva o que chegou desde o ultimo tick para o quadro. */
-    static void take(Recorder.Events into) {
+    /** Moves what arrived since the last tick into the frame. */
+    static void take(Events into) {
         into.copy(INSTANCE.pending);
-        INSTANCE.pending.count = 0;
-        INSTANCE.pending.auxCount = 0;
-        INSTANCE.pending.soundCount = 0;
+        INSTANCE.pending.clear();
     }
 
     static void clear() {
-        INSTANCE.pending.count = 0;
-        INSTANCE.pending.auxCount = 0;
-        INSTANCE.pending.soundCount = 0;
+        INSTANCE.pending.clear();
     }
 
-    /** Um som do mundo que vai tocar ({@link SteinReplay#onPlaySound}): entra no quadro do tick. */
+    /** A world sound about to play ({@link SteinReplay#onPlaySound}): it goes into the tick. */
     static void sound(String name, float x, float y, float z, float volume, float pitch) {
         if (!replaying && near(x, y, z)) {
             INSTANCE.pending.addSound(name, x, y, z, volume, pitch);
@@ -86,7 +84,15 @@ final class ParticleTap implements IWorldAccess {
     }
 
     @Override
-    public void spawnParticle(int id, boolean ignoreRange, double x, double y, double z, double dx, double dy, double dz,
+    public void spawnParticle(
+            int id,
+            boolean ignoreRange,
+            double x,
+            double y,
+            double z,
+            double dx,
+            double dy,
+            double dz,
             int... params) {
         if (replaying || !near(x, y, z)) {
             return;
@@ -96,8 +102,8 @@ final class ParticleTap implements IWorldAccess {
 
     @Override
     public void playAuxSFX(EntityPlayer player, int type, BlockPos pos, int data) {
-        // So os efeitos com particula (2000 em diante: fumaca, bloco quebrando, pocao estourando...); os de 1000 sao
-        // so som.
+        // Only the effects with particles (2000 and up: smoke, block breaking, splash potion...);
+        // the 1000s are sound only.
         if (replaying || type < 2000 || !near(pos.getX(), pos.getY(), pos.getZ())) {
             return;
         }
@@ -105,43 +111,39 @@ final class ParticleTap implements IWorldAccess {
     }
 
     @Override
-    public void markBlockForUpdate(BlockPos pos) {
-    }
+    public void markBlockForUpdate(BlockPos pos) {}
 
     @Override
-    public void notifyLightSet(BlockPos pos) {
-    }
+    public void notifyLightSet(BlockPos pos) {}
 
     @Override
-    public void markBlockRangeForRenderUpdate(int x1, int y1, int z1, int x2, int y2, int z2) {
-    }
+    public void markBlockRangeForRenderUpdate(int x1, int y1, int z1, int x2, int y2, int z2) {}
 
     @Override
-    public void playSound(String sound, double x, double y, double z, float volume, float pitch) {
-    }
+    public void playSound(String sound, double x, double y, double z, float volume, float pitch) {}
 
     @Override
-    public void playSoundToNearExcept(EntityPlayer except, String sound, double x, double y, double z, float volume,
-            float pitch) {
-    }
+    public void playSoundToNearExcept(
+            EntityPlayer except,
+            String sound,
+            double x,
+            double y,
+            double z,
+            float volume,
+            float pitch) {}
 
     @Override
-    public void onEntityAdded(Entity entity) {
-    }
+    public void onEntityAdded(Entity entity) {}
 
     @Override
-    public void onEntityRemoved(Entity entity) {
-    }
+    public void onEntityRemoved(Entity entity) {}
 
     @Override
-    public void playRecord(String record, BlockPos pos) {
-    }
+    public void playRecord(String record, BlockPos pos) {}
 
     @Override
-    public void broadcastSound(int id, BlockPos pos, int data) {
-    }
+    public void broadcastSound(int id, BlockPos pos, int data) {}
 
     @Override
-    public void sendBlockBreakProgress(int breaker, BlockPos pos, int progress) {
-    }
+    public void sendBlockBreakProgress(int breaker, BlockPos pos, int progress) {}
 }

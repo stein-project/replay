@@ -9,12 +9,7 @@
 package dev.xavier.stein.replay;
 
 import com.mojang.authlib.GameProfile;
-import com.mojang.authlib.properties.Property;
-import io.netty.buffer.Unpooled;
-import java.util.ArrayList;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.Map;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.multiplayer.PlayerControllerMP;
@@ -22,8 +17,6 @@ import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.network.EnumPacketDirection;
 import net.minecraft.network.NetworkManager;
-import net.minecraft.network.PacketBuffer;
-import net.minecraft.network.play.server.S38PacketPlayerListItem;
 import net.minecraft.world.EnumDifficulty;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
@@ -31,27 +24,47 @@ import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.NibbleArray;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
- * O mundo de um replay salvo, so no cliente: sem servidor e sem conexao (a conexao e de mentira e nunca abre, o que o
- * jogo manda fica parado na fila dela). Tem os blocos guardados em volta da morte, a hora do dia de entao e as skins
- * de cada jogador (o perfil assinado que o servidor mandou vai para a lista de jogadores, como faria o servidor). O
- * jogador fica no modo espectador; quem mostra a cena e a camera do {@link Session}.
+ * The world of a saved replay, on the client only: no server and no connection (the connection is a
+ * fake that never opens, and what the game sends waits in its queue). It has the blocks kept around
+ * the death, the time of day of then and every player's skin (the signed profile the server sent
+ * goes into the player list, as the server would do). The player is a spectator; the scene is shown
+ * by the {@link Session}'s camera.
  */
 final class ReplayWorld {
 
-    private ReplayWorld() {
-    }
+    private ReplayWorld() {}
 
-    /** Abre o mundo do replay (so fora de uma partida). @return false se ja ha um mundo aberto */
-    static boolean open(Minecraft mc, Recording r, GuiScreen back) throws java.io.IOException {
+    /**
+     * Opens the replay's world (only outside a match).
+     *
+     * @return false if a world is already open
+     */
+    static boolean open(Minecraft mc, Recording r, GuiScreen back) {
         if (mc.theWorld != null) {
             return false;
         }
         NetworkManager net = new NetworkManager(EnumPacketDirection.CLIENTBOUND);
-        NetHandlerPlayClient handler = new NetHandlerPlayClient(mc, back, net, mc.getSession().getProfile());
+        NetHandlerPlayClient handler =
+                new NetHandlerPlayClient(mc, back, net, mc.getSession().getProfile());
         mc.playerController = new PlayerControllerMP(mc, handler);
-        WorldClient world = new WorldClient(handler, new WorldSettings(0L, WorldSettings.GameType.SPECTATOR, false, false,
-                WorldType.DEFAULT), r.dimension, EnumDifficulty.PEACEFUL, mc.mcProfiler);
+        WorldClient world =
+                new WorldClient(
+                        handler,
+                        new WorldSettings(
+                                0L,
+                                WorldSettings.GameType.SPECTATOR,
+                                false,
+                                false,
+                                WorldType.DEFAULT),
+                        r.dimension,
+                        EnumDifficulty.PEACEFUL,
+                        mc.mcProfiler);
         players(handler, r, mc.getSession().getProfile());
         mc.loadWorld(world);
         mc.playerController.setGameType(WorldSettings.GameType.SPECTATOR);
@@ -59,14 +72,14 @@ final class ReplayWorld {
         for (Recording.ChunkData d : r.chunks) {
             chunk(world, d);
         }
-        Recorder.Snap me = r.size() > 0 ? r.frame(0).self() : null;
+        Snap me = r.size() > 0 ? r.frame(0).self() : null;
         if (me != null) {
             mc.thePlayer.setPositionAndRotation(me.x, me.y, me.z, me.yaw, me.pitch);
         }
         return true;
     }
 
-    /** Fecha o mundo e volta para a tela dada. */
+    /** Closes the world and goes back to the given screen. */
     static void close(Minecraft mc, GuiScreen to) {
         if (mc.theWorld != null) {
             mc.loadWorld(null);
@@ -74,12 +87,11 @@ final class ReplayWorld {
         mc.displayGuiScreen(to);
     }
 
-    /** Os jogadores na lista (para as skins), pelo mesmo pacote que o servidor mandaria. */
-    private static void players(NetHandlerPlayClient handler, Recording r, GameProfile self)
-            throws java.io.IOException {
+    /** The players in the list (for the skins), and you as a spectator. */
+    private static void players(NetHandlerPlayClient handler, Recording r, GameProfile self) {
         Map<GameProfile, Boolean> seen = new IdentityHashMap<>();
         List<GameProfile> list = new ArrayList<>();
-        for (Recorder.Frame f : r.frames) {
+        for (Frame f : r.frames) {
             for (int i = 0; i < f.count; i++) {
                 GameProfile p = f.snaps[i].profile;
                 if (p != null && p.getId() != null && seen.put(p, Boolean.TRUE) == null) {
@@ -87,40 +99,14 @@ final class ReplayWorld {
                 }
             }
         }
-        // Voce, como espectador: e pela lista que o jogo desenha como espectador (vendo atraves dos blocos).
+        // You, as a spectator: the game draws as a spectator (seeing through blocks) by the list.
         if (self != null && self.getId() != null) {
             list.add(self);
         }
-        if (list.isEmpty()) {
-            return;
-        }
-        PacketBuffer buf = new PacketBuffer(Unpooled.buffer());
-        buf.writeEnumValue(S38PacketPlayerListItem.Action.ADD_PLAYER);
-        buf.writeVarIntToBuffer(list.size());
-        for (GameProfile p : list) {
-            buf.writeUuid(p.getId());
-            buf.writeString(p.getName() == null ? "" : p.getName());
-            List<Property> props = new ArrayList<>(p.getProperties().values());
-            buf.writeVarIntToBuffer(props.size());
-            for (Property pr : props) {
-                buf.writeString(pr.getName());
-                buf.writeString(pr.getValue());
-                buf.writeBoolean(pr.hasSignature());
-                if (pr.hasSignature()) {
-                    buf.writeString(pr.getSignature());
-                }
-            }
-            buf.writeVarIntToBuffer(p == self ? WorldSettings.GameType.SPECTATOR.getID()
-                    : WorldSettings.GameType.SURVIVAL.getID());
-            buf.writeVarIntToBuffer(0);
-            buf.writeBoolean(false);
-        }
-        S38PacketPlayerListItem packet = new S38PacketPlayerListItem();
-        packet.readPacketData(buf);
-        handler.handlePlayerListItem(packet);
+        PlayerListPackets.add(handler, list, self);
     }
 
-    /** Um chunk guardado no mundo do replay: as secoes com os blocos e a luz de entao, os biomas e a altura. */
+    /** A kept chunk in the replay's world: the sections with the blocks and light of then. */
     private static void chunk(WorldClient world, Recording.ChunkData d) {
         world.doPreChunk(d.x, d.z, true);
         Chunk c = world.getChunkFromChunkCoords(d.x, d.z);
@@ -142,6 +128,7 @@ final class ReplayWorld {
         c.setTerrainPopulated(true);
         c.setLightPopulated(true);
         c.generateSkylightMap();
-        world.markBlockRangeForRenderUpdate(d.x << 4, 0, d.z << 4, (d.x << 4) + 15, 255, (d.z << 4) + 15);
+        world.markBlockRangeForRenderUpdate(
+                d.x << 4, 0, d.z << 4, (d.x << 4) + 15, 255, (d.z << 4) + 15);
     }
 }
