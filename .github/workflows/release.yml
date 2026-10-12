@@ -46,7 +46,7 @@ jobs:
     env:
       # --- what changes from mod to mod ---
       INDEX_ID: replay
-      INDEX_DESCRIPTION: Replay da morte: veja como você morreu antes de renascer.
+      INDEX_DESCRIPTION: "Replay da morte: veja como você morreu antes de renascer."
       # An open mod is released in its own repository.
       RELEASE_REPO: ${{ github.repository }}
       # ---
