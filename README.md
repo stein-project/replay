@@ -25,7 +25,7 @@ The options are kept in `config/steinreplay.json`.
 
 ## Download
 
-The [Stein Client](https://github.com/Stein-Project/stein-client/releases/latest) installs and updates it for you.
+The [Stein Client](https://stein-project.github.io/downloads/) installs and updates it for you.
 By hand: download `Replay.steinmod` from the
 [latest release](https://github.com/Stein-Project/replay/releases/latest), put it in `.minecraft/mods` and play
 with the **Stein Loader** profile.
@@ -33,7 +33,7 @@ with the **Stein Loader** profile.
 ## Building
 
 You need **JDK 25 or newer**.
-The [Stein SDK](https://github.com/Stein-Project/stein-sdk) Gradle plugin prepares Minecraft 1.8.9 for compiling the
+The [Stein SDK](https://github.com/Stein-Project/sdk) Gradle plugin prepares Minecraft 1.8.9 for compiling the
 first time, from your own installation or from Mojang.
 
 ```sh
