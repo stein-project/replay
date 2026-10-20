@@ -13,6 +13,7 @@ import dev.xavier.stein.loader.api.Lang;
 import dev.xavier.stein.loader.api.ModConfig;
 import dev.xavier.stein.loader.api.Option;
 import dev.xavier.stein.loader.api.Page;
+import dev.xavier.stein.loader.api.Server;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -48,6 +49,13 @@ final class ReplayPage {
                             c.enabled = v;
                             config.saveSoon();
                         }));
+        // On a server that does not allow the live replay, a line says so: the death replay is
+        // still recorded and saved there, to watch later. The page is built when the Panel opens,
+        // so the server is the one the player is on at that moment.
+        String server = Server.restrictedBy("liveReplay");
+        if (!server.isEmpty()) {
+            page.option(Option.action(Lang.tr("steinreplay.serverOff", server), "", () -> {}));
+        }
         page.option(
                 Option.slider(
                         tr("steinreplay.seconds"),

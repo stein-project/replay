@@ -1,6 +1,7 @@
 # Replay: replay da morte
 steinreplay.title=Replay da morte
 steinreplay.enabled=Mostrar ao morrer
+steinreplay.serverOff=Desligado no %s: este servidor não permite durante a partida (continua salvo, para ver depois)
 steinreplay.seconds=Duração
 steinreplay.paused=pausado
 steinreplay.killedBy=§fMorto por §c%s

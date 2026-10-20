@@ -28,10 +28,14 @@ import java.util.List;
 
 /**
  * Death replay: the game always keeps the last seconds of the players around ({@link Recorder}).
- * When you die, the game goes on in slow motion for a few seconds, as it was ({@link
- * DeathSlowMotion}, {@link DyingScreen}), fades to black, and the replay takes the death screen's
- * place ({@link Session}, {@link ReplayScreen}): it loops until you respawn, with the respawn and
- * leave-server buttons.
+ * When you die, the screen turns red and fades to black while the game goes on as it was ({@link
+ * DeathFade}, {@link DyingScreen}), and the replay takes the death screen's place ({@link Session},
+ * {@link ReplayScreen}): it slows down around the death, loops until you respawn, with the respawn
+ * and leave-server buttons.
+ *
+ * <p>On a server that does not allow seeing the replay during the match ({@code liveReplay}, the
+ * registry's server rules: Hypixel), nothing opens: the game's death screen stays, and the replay
+ * is still recorded and saved, to watch later from the Stein Loader menu.
  *
  * <p>Every death replay is saved ({@link SavedReplays}, {@link ReplayFile}: the frames and the
  * blocks around) in {@code steinloader/replays}. From the Stein Loader menu (Configure, on Replay)
@@ -65,7 +69,14 @@ public final class SteinReplay implements SteinMod {
     private final Recorder recorder = new Recorder(MAX_SECONDS * 20);
     private final SavedReplays files = new SavedReplays(log);
     private final ReplayPage page = new ReplayPage(config, files);
-    private final DeathSlowMotion dying = new DeathSlowMotion();
+    private final DeathFade dying = new DeathFade();
+
+    /**
+     * Ticks still to record after a death that does not show (the server does not allow the live
+     * replay); -1 outside one.
+     */
+    private int quietAfter = -1;
+
     private final long started = System.nanoTime();
 
     private Session session;
@@ -114,8 +125,9 @@ public final class SteinReplay implements SteinMod {
     public void onJoinGame() {
         recorder.clear();
         if (dying.active()) {
-            dying.stop(Minecraft.getMinecraft());
+            dying.stop();
         }
+        quietAfter = -1;
         shownThisDeath = false;
     }
 
@@ -148,6 +160,10 @@ public final class SteinReplay implements SteinMod {
             tickDeathReplay(mc);
             return;
         }
+        if (quietAfter >= 0) {
+            tickQuiet(mc);
+            return;
+        }
         if (mc.thePlayer == null) {
             return;
         }
@@ -156,19 +172,25 @@ public final class SteinReplay implements SteinMod {
             recorder.record(mc);
             return;
         }
-        // Died: the death in slow motion (the game as it is, nothing touched), the fade and the
-        // replay in place of the death screen. Without a usable recording (just joined) or in
-        // hardcore, the game's death screen stays.
+        // Died: the red and the fade (the game as it is, nothing touched) and the replay in place
+        // of the death screen. Without a usable recording (just joined) or in hardcore, the game's
+        // death screen stays. On a server that does not allow the live replay, it is only recorded
+        // and saved.
         if (!shownThisDeath
                 && config.get().enabled
                 && recorder.size() >= MIN_RECORDED
                 && recorder.hasSelf()
                 && !mc.theWorld.getWorldInfo().isHardcoreModeEnabled()) {
             shownThisDeath = true;
+            if (!Server.allows("liveReplay")) {
+                quietAfter = AFTER_DEATH;
+                recorder.record(mc);
+                return;
+            }
             deadX = mc.thePlayer.posX;
             deadY = mc.thePlayer.posY;
             deadZ = mc.thePlayer.posZ;
-            dying.start(mc);
+            dying.start();
             mc.displayGuiScreen(new DyingScreen(dying));
             recorder.record(mc);
         }
@@ -218,15 +240,16 @@ public final class SteinReplay implements SteinMod {
     }
 
     /**
-     * A new world: the previous one's recording no longer applies, and the slow-motion death or the
-     * replay in progress end (with the player dead in the new world, the game's death screen opens
-     * by itself).
+     * A new world: the previous one's recording no longer applies, and the death fade or the replay
+     * in progress end (with the player dead in the new world, the game's death screen opens by
+     * itself).
      */
     private void worldChanged(Minecraft mc) {
         recorder.clear();
         shownThisDeath = false;
+        quietAfter = -1;
         if (dying.active()) {
-            dying.stop(mc);
+            dying.stop();
             if (mc.currentScreen instanceof DyingScreen) {
                 mc.displayGuiScreen(null);
             }
@@ -237,22 +260,57 @@ public final class SteinReplay implements SteinMod {
     }
 
     /**
-     * A tick of the slow-motion death: the game keeps recording (the body falling, the items), the
-     * screen fades at the end and the replay comes in. If the player respawns before (a server that
+     * A tick of the death fade: the game keeps recording (the body falling, the items), the screen
+     * fades at the end and the replay comes in. If the player respawns before (a server that
      * respawns by itself), everything goes back.
      */
     private void tickDying(Minecraft mc) {
         if (mc.thePlayer == null || mc.theWorld == null || mc.thePlayer.getHealth() > 0) {
-            dying.stop(mc);
+            dying.stop();
             if (mc.currentScreen instanceof DyingScreen) {
                 mc.displayGuiScreen(null);
             }
             return;
         }
         recorder.record(mc);
-        if (dying.tick(mc)) {
+        if (dying.tick()) {
             start(mc);
         }
+    }
+
+    /**
+     * A tick after a death that does not show: the seconds after it (the body falling, the items)
+     * are recorded as for a replay, then it is saved, with nothing on screen. A respawn or a world
+     * change before that saves what there is.
+     */
+    private void tickQuiet(Minecraft mc) {
+        boolean alive = mc.thePlayer == null || mc.theWorld == null || mc.thePlayer.getHealth() > 0;
+        if (!alive) {
+            recorder.record(mc);
+        }
+        if (alive || --quietAfter <= 0) {
+            quietAfter = -1;
+            saveQuiet(mc);
+        }
+    }
+
+    /** Saves the death replay that did not show: the same stretch the replay would have played. */
+    private void saveQuiet(Minecraft mc) {
+        try {
+            if (config.get().save && recorder.size() >= MIN_RECORDED && mc.theWorld != null) {
+                int want = Math.max(5, Math.min(MAX_SECONDS, config.get().seconds)) * 20;
+                Recording r = Recording.capture(mc, recorder, Server.address());
+                r.trimStart(Math.max(0, r.size() - AFTER_DEATH - want));
+                int[] k = KillerSearch.find(r, r.size());
+                Snap ks = k[0] >= 0 ? r.frame(k[1]).find(k[0]) : null;
+                r.setKiller(ks != null && ks.profile != null ? ks.profile.getName() : null);
+                files.saveLater(r);
+                log.info("death replay saved without showing (" + r.size() / 20 + " s)");
+            }
+        } catch (RuntimeException e) {
+            log.error("could not save the death replay", e);
+        }
+        recorder.clear();
     }
 
     /**
@@ -278,13 +336,13 @@ public final class SteinReplay implements SteinMod {
         int want = Math.max(5, Math.min(MAX_SECONDS, config.get().seconds)) * 20;
         Recording r = Recording.capture(mc, recorder, Server.address());
         // Only the stretch that plays (and goes to disk).
-        r.trimStart(Math.max(0, r.size() - DeathSlowMotion.TICKS - want));
+        r.trimStart(Math.max(0, r.size() - DeathFade.TICKS - want));
         session = new Session(mc, r, false, log);
         r.setKiller(session.killerName);
         session.growing = true;
         session.fadeIn();
         live = r;
-        afterDeath = DeathSlowMotion.TICKS; // the slow-motion ticks are already recorded
+        afterDeath = DeathFade.TICKS; // the fade's ticks are already recorded
         mc.displayGuiScreen(new ReplayScreen(this));
         log.info(
                 "death replay: "
