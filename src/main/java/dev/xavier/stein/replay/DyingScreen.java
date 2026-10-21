@@ -13,19 +13,19 @@ import dev.xavier.stein.loader.api.Render;
 import net.minecraft.client.gui.GuiScreen;
 
 /**
- * The death in slow motion, before the replay: a transparent screen (the game, the HUD and the
- * camera go on as they were, nothing is hidden or moved) only so the game's death screen does not
- * open, which turns red at the moment of death (so it does not look like the game froze) and fades
- * to black at the end. The game runs slowly while it is open ({@link DeathSlowMotion}).
+ * The moment of death, before the replay: a transparent screen (the game, the HUD and the camera go
+ * on as they were, nothing is hidden or moved) only so the game's death screen does not open, which
+ * turns red at the moment of death (so it does not look like the game froze) and fades to black at
+ * the end ({@link DeathFade}). The game keeps its normal pace.
  */
 final class DyingScreen extends GuiScreen {
 
     /** The death red, over the game. */
     private static final int RED = 0x70C00000;
 
-    private final DeathSlowMotion dying;
+    private final DeathFade dying;
 
-    DyingScreen(DeathSlowMotion dying) {
+    DyingScreen(DeathFade dying) {
         this.dying = dying;
     }
 

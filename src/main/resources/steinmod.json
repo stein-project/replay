@@ -5,5 +5,5 @@
   "author": "X4vieer",
   "description": "Death replay: when you die, a slow-motion moment, then the last seconds of the fight become your respawn screen — a drone camera and, in the slow motion, your killer's eyes. Client-side only: it replays what your game already received.",
   "entry": "dev.xavier.stein.replay.SteinReplay",
-  "loader": "0.1.24"
+  "loader": "0.1.28"
 }
