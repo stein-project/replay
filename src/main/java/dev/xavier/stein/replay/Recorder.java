@@ -169,10 +169,14 @@ final class Recorder implements Source {
         List<Entity> all = mc.theWorld.loadedEntityList;
         for (int i = 0; i < all.size() && f.count < f.snaps.length; i++) {
             Entity e = all.get(i);
+            // The cheap tests first: kindOf ends in a map lookup by class for every mob, and most
+            // loaded entities are out of range. None of the three has side effects, so the order
+            // does not change what is recorded.
+            if (Actors.isFake(e) || !(e.getDistanceSqToEntity(me) <= OTHER_RADIUS * OTHER_RADIUS)) {
+                continue;
+            }
             int what = kindOf(e);
-            if (what >= 0
-                    && !Actors.isFake(e)
-                    && e.getDistanceSqToEntity(me) <= OTHER_RADIUS * OTHER_RADIUS) {
+            if (what >= 0) {
                 f.snaps[f.count++].copy(e, what);
             }
         }
