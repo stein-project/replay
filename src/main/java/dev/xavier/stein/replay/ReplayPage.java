@@ -49,6 +49,14 @@ final class ReplayPage {
                             c.enabled = v;
                             config.saveSoon();
                         }));
+        page.option(
+                Option.toggle(
+                        tr("steinreplay.showOnDeath"),
+                        () -> c.showOnDeath,
+                        v -> {
+                            c.showOnDeath = v;
+                            config.saveSoon();
+                        }));
         // On a server that does not allow the live replay, a line says so: the death replay is
         // still recorded and saved there, to watch later. The page is built when the Panel opens,
         // so the server is the one the player is on at that moment.
