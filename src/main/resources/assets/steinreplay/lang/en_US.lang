@@ -1,6 +1,7 @@
 # Replay: death replay
 steinreplay.title=Death replay
-steinreplay.enabled=Show on death
+steinreplay.enabled=Record replays
+steinreplay.showOnDeath=Show on death
 steinreplay.serverOff=Off on %s: this server does not allow it during the match (still saved, to watch later)
 steinreplay.seconds=Length
 steinreplay.paused=paused

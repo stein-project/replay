@@ -14,8 +14,14 @@ package dev.xavier.stein.replay;
  */
 final class ReplayConfig {
 
-    /** Show the replay on death. */
+    /** Record the fight, for the replay. */
     boolean enabled = true;
+
+    /**
+     * Show it in place of the death screen. Off by default: there are servers that do not allow it
+     * during the match, and the mod no longer knows which; it stays recorded and saved anyway.
+     */
+    boolean showOnDeath = false;
 
     /** How many seconds to play. */
     int seconds = 15;
@@ -27,6 +33,7 @@ final class ReplayConfig {
     void reset() {
         ReplayConfig d = new ReplayConfig();
         enabled = d.enabled;
+        showOnDeath = d.showOnDeath;
         seconds = d.seconds;
         save = d.save;
     }

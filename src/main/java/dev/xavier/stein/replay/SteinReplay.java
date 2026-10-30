@@ -174,15 +174,15 @@ public final class SteinReplay implements SteinMod {
         }
         // Died: the red and the fade (the game as it is, nothing touched) and the replay in place
         // of the death screen. Without a usable recording (just joined) or in hardcore, the game's
-        // death screen stays. On a server that does not allow the live replay, it is only recorded
-        // and saved.
+        // death screen stays. Unless the player asked for it, and on a server that does not allow
+        // the live replay, it is only recorded and saved.
         if (!shownThisDeath
                 && config.get().enabled
                 && recorder.size() >= MIN_RECORDED
                 && recorder.hasSelf()
                 && !mc.theWorld.getWorldInfo().isHardcoreModeEnabled()) {
             shownThisDeath = true;
-            if (!Server.allows("liveReplay")) {
+            if (!config.get().showOnDeath || !Server.allows("liveReplay")) {
                 quietAfter = AFTER_DEATH;
                 recorder.record(mc);
                 return;
